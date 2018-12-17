@@ -18,6 +18,10 @@ struct Card {
 	cv::Mat image;
 	int number;
 	char symbol;
+	int red_number;
+	bool red;
+	vector<cv::Moments> figures_moments;
+	vector<vector<double>> hu_moments;
 
 	vector<cv::Vec4i>						hierarchy;
 	std::vector<std::vector<cv::Point> >	contours;
@@ -29,6 +33,7 @@ struct Images {
 	cv::Mat image;
 	cv::Mat preprocessed_image;
 	cv::Mat binary;
+	bool divideable_cards;
 
 	vector<Card>		card;
 	vector<int>			card_contour_index;
@@ -139,6 +144,23 @@ void CreateMinRect(vector<Images>& images) {
 	}
 }
 
+void CheckCornersPointsOrientation(Card_Corners& temp) {
+	double x_mean, y_mean;
+	x_mean = (temp.left_bottom.x + temp.right_top.x) / 2;
+	y_mean = (temp.left_bottom.y + temp.right_top.y) / 2;
+	while (temp.left_bottom.x > x_mean ||
+		temp.left_top.x > x_mean ||
+		temp.right_top.x < x_mean ||
+		temp.right_bottom.x < x_mean) {
+		cv::Point2f t_point;
+		t_point = temp.left_bottom;
+		temp.left_bottom = temp.right_bottom;
+		temp.right_bottom = temp.right_top;
+		temp.right_top = temp.left_top;
+		temp.left_top = t_point;
+	}
+}
+
 void SetCardsRectanglesCornerPoints(Card_Corners&					card_corners_positions,
 								    const vector<cv::RotatedRect>&	min_rect,
 								    const vector<int>&				card_contour_index,
@@ -151,6 +173,7 @@ void SetCardsRectanglesCornerPoints(Card_Corners&					card_corners_positions,
 	temp.left_top = t_corners[1];
 	temp.right_top = t_corners[2];
 	temp.right_bottom = t_corners[3];
+	CheckCornersPointsOrientation(temp);
 	card_corners_positions = temp;
 }
 
@@ -198,7 +221,7 @@ void SplitCardsOnImages(vector<Images> &images) {
 }
 
 void SetCardNumber(Card& card) {
-	int t_number=0;
+	int t_number=-4;
 	for (int i = 0; i < card.hierarchy.size(); i++) {
 		if (card.hierarchy[i][3] == 0) t_number++;
 	}
@@ -210,6 +233,129 @@ void SetCardNumber(Card& card) {
 		card.number = t_number;
 	}
 }
+
+bool CheckRed(cv::Mat& image) {
+	int t_counter = 0;
+	for (int i = 0; i < image.rows; i++) {
+		for (int j = 0; j < image.cols; j++) {
+			if (image.at<unsigned char>(i,j) > 25 && image.at<unsigned char>(i,j) < 75) {
+				t_counter++;
+			}
+		}
+	}
+	if (t_counter > 4000) {
+		return 1;
+	}
+	else {
+		return 0;
+	}
+}
+
+void CountMoments(Card& card) {
+	for (int i = 0; i < card.contours.size(); i++) {
+		cv::Moments mu;
+		mu = cv::moments(card.contours[i]);
+		card.figures_moments.push_back(mu);
+	}
+}
+
+void CountHuMoments(Card& card) {
+	card.hu_moments.clear();
+	vector<double> temp(7);
+	card.hu_moments.assign(card.figures_moments.size(), temp);
+	for (int i = 0; i < card.figures_moments.size(); i++){
+		vector<double> temp(7);
+		cv::HuMoments(card.figures_moments[i], temp);
+		card.hu_moments[i]=temp;
+	}
+}
+
+void SetSymbol(Card& card) {
+	int S_counter = 0, D_counter=0, C_counter=0, H_counter=0;
+	for (int i = 0; i < card.figures_moments.size(); i++) {
+		if (card.figures_moments[i].m00 > 1500 &&
+			card.figures_moments[i].m00 < 5000) {
+			if (card.hu_moments[i][2] > 0.0009){
+				H_counter++;
+			}
+			if (card.hu_moments[i][2] > 0.00001 &&
+				card.hu_moments[i][2] < 0.0005) {
+				C_counter++;
+			}
+		}
+	}
+	if (H_counter > 0) {
+		card.symbol = 'H';
+		return ;
+	}
+	if (C_counter > 0) {
+		card.symbol = 'C';
+		return ;
+	}
+	if (card.red == 1) {
+		card.symbol = 'D';
+		return;
+	}
+	else {
+		card.symbol = 'S';
+		return;
+	}
+
+}
+
+
+bool CheckDivideable(Images& image) {
+	for (int i = 0; i < image.card.size(); i++) {
+		for (int j = 0; j < image.card.size(); j++) {
+			if (image.card[i].number % 
+				image.card[j].number == 0 &&
+				i != j) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+void SetDivideableCardsAttribute(vector<Images>& images) {
+	for (int i = 0; i < images.size(); i++) {
+		images[i].divideable_cards = CheckDivideable(images[i]);
+	}
+}
+
+
+
+void WriteCards(vector<Images>& images)
+ {
+	for (int i = 0; i < images.size(); i++) {
+		cout << images[i].file_path<<"\t\t";
+		for (int j = 0; j < images[i].card_contour_index.size(); j++) {
+			cout << images[i].card[j].number << images[i].card[j].symbol << "\t";
+		}
+		if (images[i].divideable_cards) {
+			cout << "Yes, number of one card can divide another";
+		}
+		else {
+			cout << "No, there are no divideable cards";
+
+		}
+		cout << "\n";
+	}
+}
+
+void WriteCardMoments(Card& card) {
+	for (int i = 0; i < card.figures_moments.size(); i++) {
+		if (card.figures_moments[i].m00 > 1500 &&
+			card.figures_moments[i].m00 < 5000) {
+			for (int j = 0; j < card.hu_moments[i].size(); j++) {
+				cout << card.hu_moments[i][j] << "\t";
+			}
+		}
+		cout << "\n";
+	}
+	cout << "\n\n";
+}
+
 
 int main() {
 	fstream file_images_paths;
@@ -238,35 +384,32 @@ int main() {
 
 	SplitCardsOnImages(images_files);
 
-	//TODO: symbole i ulepszyć preprocessing
+	//TODO: ulepszyć preprocessing
 
 	for (int i = 0; i < images_files.size(); i++) {
 		for (int j = 0; j < images_files[i].card.size(); j++) {
+			images_files[i].card[j].red=CheckRed(images_files[i].card[j].image);
 			CreateBinaryImage(images_files[i].card[j].image, images_files[i].card[j].image);
 			FindContoursCard(images_files[i].card[j]);
 			SetCardNumber(images_files[i].card[j]);
+			CountMoments(images_files[i].card[j]);
+			CountHuMoments(images_files[i].card[j]);
+			SetSymbol(images_files[i].card[j]);
 		}
 	}
 	
+	SetDivideableCardsAttribute(images_files);
 
-	/*cv::Mat drawing = cv::Mat::zeros(binary_rotated.size(), CV_8UC3);
-	cv::RNG rng(12345);
-	for (int i = 0; i < contours.size(); i++)
-	{
-		cv::Scalar color = cv::Scalar(rng.uniform(0, 255), rng.uniform(0, 255), rng.uniform(0, 255));
-		drawContours(drawing, contours, i, color, 1, 8, hierarchy, 0, cv::Point());
-		cv::Point2f rect_points[4];
-		minRect[i].points(rect_points);
-		for (int j = 0; j < 4; j++)
-			line(drawing, rect_points[j], rect_points[(j + 1) % 4], color, 1, 8);
-	}
+	/*WriteCardMoments(images_files[0].card[3]);
+	WriteCardMoments(images_files[12].card[0]);
+	WriteCardMoments(images_files[12].card[2]);
+	WriteCardMoments(images_files[12].card[3]);*/
 
-	cv::namedWindow("Contours", CV_WINDOW_NORMAL);
-	cvResizeWindow("Contours", 1000, 750);
-	imshow("Contours", drawing);
-
-	cv::waitKey(1);*/
+	WriteCards(images_files);
 
 	file_images_paths.close();
 	return  0;
 }
+
+
+
